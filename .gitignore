@@ -1,0 +1,29 @@
+# ── 编辑器 / IDE ──
+.idea/
+.vscode/
+*.suo
+*.sw?
+
+# ── Python 环境（根目录与后端）──
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# ── 日志 ──
+logs/
+*.log
+
+# ── 运行数据 / 缓存 ──
+backend/.langgraph_api/
+backend/milvus.db/
+backend/milvus_test.db/
+backend/eval_report_*.json
+
+# ── 前端产物 ──
+node_modules/
+dist/
+
+# ── 系统 ──
+.DS_Store
+Thumbs.db
