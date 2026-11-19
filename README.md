@@ -6,7 +6,7 @@
 
 以下截图来自本地隔离演示环境，使用示例账号与资料，展示角色登录、研究问答及计划确认等页面。
 
-**登录页**：左侧为品牌展示区（渐变背景 + 四大功能卡片），右侧为登录表单。登录接口由后端 JWT 鉴权保护，未登录访问任意页面会被重定向到这里。
+**登录页**：左侧为展示区（渐变背景 + 四大功能卡片），右侧为登录表单。登录接口由后端 JWT 鉴权保护，未登录访问任意页面会被重定向到这里。
 
 ![登录页](docs/images/login.png)
 
@@ -25,10 +25,10 @@
 - **人在回路（Human-in-the-loop）**：智能体先产出研究计划并暂停等待；用户点击「需求确认」后通过 checkpoint 中断恢复机制继续执行；需求模糊时先进入澄清问答循环，实时反馈需求清晰度百分比。
 - **双通道消息流**：首轮提问写入 Redis Streams 任务队列（`XADD` 入队、消费组 `XREADGROUP` + `XACK` 的 at-least-once 消费），处理完成后写入事件流，前端通过 SSE 订阅并支持 `Last-Event-ID` 断线重连；后续对话走 LangGraph SDK 流式通道（token 级逐字输出），两通道共用同一套消息渲染组件。
 - **过程可视化**：前端活动时间轴实时展示「生成计划 / 生成搜索查询 / 网络研究 / 反思分析 / 最终成文」各阶段及子事件，流式卡片内嵌时间轴，研究进展一目了然。
-- **全异步与流式**：按 LLM 调用 → Agent → Node → 知识库四阶段渐进异步化，双模共存平滑迁移；token 级流式链路为 OpenAI stream → `astream_step` → Redis Streams `XADD` → SSE → 前端，流式失败 3 次自动回退非流式；仅计划生成与润色成文两个长输出节点启用流式，兼顾吞吐与体验。
+- **全异步与流式**：按 LLM 调用 → Agent → Node → 知识库四阶段渐进异步化，双模式共存平滑迁移；token 级流式链路为 OpenAI stream → `astream_step` → Redis Streams `XADD` → SSE → 前端，流式失败 3 次自动回退非流式；仅计划生成与润色成文两个长输出节点启用流式，兼顾吞吐与体验。
 - **异常分类与分级重试**：异常统一分为 `TransientError`（3 次重试，退避 1.5 / 3 / 4.5s，MCP 429 单独延长为 5 / 10 / 15s）与 `PermanentError`（零重试快失败），18 处分散重试收敛为统一装饰器；认证类错误失败耗时从约 30s 降至 0s。
 - **鲁棒 JSON 提取**：LLM 结构化输出解析采用 4 级降级（围栏正则 → 括号平衡枚举候选 + 尾逗号清理 → 最长候选包裹 → 返回原文），解析成功率从约 80% 提升至 95%+。
-- **研究知识库与新鲜度管理**：研究过程中抽取的事实存入 Milvus 向量库（IVF_FLAT 索引，10 万级事实容量）；事实按主题自动分级时效（市场 7 天 / 产品 30 天 / 策略 90 天 / 技术 180 天），按 `max(0.3, 1-age/(max_age*2))` 公式衰减；支持 off / inform / freshness / lifecycle 四档模式，环境变量一键切换。
+- **研究知识库与新鲜度管理**：研究过程中抽取的事实存入 Milvus 向量库；事实按主题自动分级时效（市场 7 天 / 产品 30 天 / 策略 90 天 / 技术 180 天），按 `max(0.3, 1-age/(max_age*2))` 公式衰减；支持 off / inform / freshness / lifecycle 四档模式，环境变量一键切换。
 - **检索增强（Rerank）**：知识库召回扩为 `max(top_k*3, 20)` 后与 Web 搜索结果合并，使用 DashScope gte-rerank 交叉编码器二次精排——比 LLM 逐条打分快 10-50 倍、成本低一个数量级；重排失败自动直通原始结果，永不阻断主链路。
 - **搜索缓存与限流**：搜索结果按查询哈希 `SETEX` 缓存 1 小时，跨请求命中率 0% → 60-70%，知识复用降低搜索 API 调用 20-30%；令牌桶限流默认 12 QPS（`WEB_SEARCH_MAX_QPS`），429 错误率从约 30% 降至 5% 以下；Redis 不可用时自动降级为进程内内存缓存。
 - **多模型支持**：通过 `AVAILABLE_MODELS` 环境变量配置多个 LLM（模型 ID、显示名、图标颜色），OpenAI 兼容协议不绑定厂商，前端下拉随时切换，仅改环境变量即可整体换模型。
@@ -49,17 +49,22 @@
 
 ## 技术栈
 
-| 层 | 技术 |
+| 层次 | 选型 |
 | --- | --- |
-| 编排 | LangGraph：StateGraph 条件边、Send 并行扇出、子图嵌套、checkpoint 中断恢复、双模流式 |
-| 后端服务 | FastAPI + LangGraph Runtime（2024 端口）；基于 Redis Streams 的轻量任务队列（消费组 + 断线重连） |
-| 前端 | React 18 + TypeScript + Vite + Tailwind CSS v4 + shadcn/ui，SSE 订阅与 SDK 流式双通道渲染 |
-| LLM / 工具 | OpenAI 兼容协议（默认 DashScope，不绑定厂商）；阿里百炼 MCP Web 搜索 |
-| 存储 | PostgreSQL（用户表 + checkpoint）；Redis（会话 / 缓存 / 任务队列 / 事件流）；Milvus 自托管（IVF_FLAT，数据不出域） |
-| 检索与重排 | DashScope Embedding + gte-rerank 交叉编码器精排 |
-| 评估 | LLM-as-Judge：Pydantic 结构化评分、E2E 5 维度 + 组件级引用四态判定 |
-| 测试 | pytest 六层体系（297 用例，全量约 60s），可挂 pre-commit |
-| 部署 | `docker-compose.milvus.yml` 一键启动 Milvus；前后端脚本一键启动 |
+| 前端 | Vite + React 18 + TypeScript + Tailwind CSS + shadcn/ui |
+| 后端 | Python 3.11 + FastAPI  |
+| 编排 | LangGraph（StateGraph 条件边 + 子图嵌套 + checkpoint） |
+| 对话模型 | OpenAI 兼容协议（默认阿里百炼，可替换其他供应商） |
+| 搜索工具 | 阿里百炼 MCP Web 搜索 |
+| Embedding | DashScope text-embedding（OpenAI 兼容，可换 Ollama bge-m3） |
+| 重排 | DashScope gte-rerank 交叉编码器 |
+| 向量库 | Milvus（自托管，IVF_FLAT 索引） |
+| 关系库 | PostgreSQL（用户表 + checkpoint） |
+| 缓存与队列 | Redis（会话 / 搜索缓存 / Streams 任务队列 / SSE 事件流） |
+| 对话记忆 | LangGraph Checkpoint（存 PostgreSQL） |
+| 评估 | LLM-as-Judge（Pydantic 结构化评分） |
+| 测试 | pytest 六层体系（297 用例） |
+| 部署 | Docker Compose（Milvus 一键启动） |
 
 ## 目录结构
 
